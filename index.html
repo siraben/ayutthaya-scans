@@ -8,6 +8,12 @@
     <meta property="og:title" content="Ayutthaya 3D">
     <meta property="og:description" content="3D LiDAR scans from Ayutthaya">
 
+    <!-- Preconnect to CDNs for faster loading -->
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+    <link rel="dns-prefetch" href="https://cdn.jsdelivr.net">
+    <link rel="dns-prefetch" href="https://www.gstatic.com">
+
     <!-- PWA -->
     <meta name="theme-color" content="#1a1a1a">
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -171,10 +177,38 @@
             left: 50%;
             transform: translate(-50%, -50%);
             background: rgba(30, 30, 30, 0.95);
-            padding: 20px 40px;
+            padding: 20px 30px;
             border-radius: 8px;
             z-index: 200;
             display: none;
+            text-align: center;
+            min-width: 200px;
+        }
+        #loading-text {
+            margin-bottom: 12px;
+            font-size: 14px;
+        }
+        #loading-bar {
+            width: 100%;
+            height: 4px;
+            background: #333;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        #loading-progress {
+            width: 0%;
+            height: 100%;
+            background: #4a9eff;
+            border-radius: 2px;
+            transition: width 0.1s ease-out;
+        }
+        #loading.indeterminate #loading-progress {
+            width: 30%;
+            animation: indeterminate 1.5s ease-in-out infinite;
+        }
+        @keyframes indeterminate {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(400%); }
         }
         .toggle-panel {
             position: absolute;
@@ -426,7 +460,10 @@
         <div>FPS: <span id="fps">0</span></div>
     </div>
 
-    <div id="loading">Loading model...</div>
+    <div id="loading" class="indeterminate">
+        <div id="loading-text">Loading model...</div>
+        <div id="loading-bar"><div id="loading-progress"></div></div>
+    </div>
 
     <script type="importmap">
     {
@@ -681,7 +718,15 @@
 
         function loadModel(filename) {
             if (!filename) return;
-            dom.loading.style.display = 'block';
+
+            const loadingEl = dom.loading;
+            const progressEl = $('loading-progress');
+            const textEl = $('loading-text');
+
+            loadingEl.classList.add('indeterminate');
+            loadingEl.style.display = 'block';
+            textEl.textContent = 'Loading model...';
+            progressEl.style.width = '0%';
 
             if (currentModel) {
                 scene.remove(currentModel);
@@ -704,12 +749,20 @@
                     resetTransform();
                     applyCameraPreset(filename);
                     updateBoundingBox();
-                    dom.loading.style.display = 'none';
+                    loadingEl.style.display = 'none';
                 },
-                null,
+                (progress) => {
+                    if (progress.lengthComputable) {
+                        loadingEl.classList.remove('indeterminate');
+                        const pct = (progress.loaded / progress.total * 100).toFixed(0);
+                        progressEl.style.width = `${pct}%`;
+                        const mb = (progress.loaded / 1024 / 1024).toFixed(1);
+                        textEl.textContent = `Loading... ${pct}% (${mb} MB)`;
+                    }
+                },
                 err => {
                     console.error('Error loading model:', err);
-                    dom.loading.style.display = 'none';
+                    loadingEl.style.display = 'none';
                     alert(`Error loading model: ${err.message}`);
                 }
             );
