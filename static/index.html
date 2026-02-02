@@ -422,36 +422,88 @@
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 
-        // Scene setup
-        const container = document.getElementById('canvas-container');
+        // DOM helpers
+        const $ = id => document.getElementById(id);
+        const on = (el, evt, fn) => (typeof el === 'string' ? $(el) : el).addEventListener(evt, fn);
+
+        // Cached DOM refs
+        const dom = {
+            container: $('canvas-container'),
+            controls: $('controls'),
+            loading: $('loading'),
+            modelSelect: $('model-select'),
+            fps: $('fps'),
+            camPos: $('cam-pos'),
+            camTarget: $('cam-target'),
+        };
+
+        // Config
+        const CONFIG = {
+            moveSpeed: 0.1,
+            presets: {
+                '1.glb': { pos: [17.77, 16.52, -4.36], target: [-0.63, -2.23, 1.65] },
+                '2.glb': { pos: [5.92, 5.00, 6.77], target: [-0.16, -0.75, 0.03] },
+                '3.glb': { pos: [6.86, 3.29, 7.76], target: [-1.9, -2.79, -1.66] },
+            },
+            models: [
+                { name: 'Wat Mahathat', filename: '1.glb' },
+                { name: 'Wat Yai Chai Mongkhon', filename: '2.glb' },
+                { name: 'Wat Chaiwatthanaram', filename: '3.glb' },
+            ],
+        };
+
+        // State
+        let currentModel = null;
+        let boundingBoxHelper = null;
+        let urlUpdateTimeout;
+        const keys = { w: false, a: false, s: false, d: false, space: false, shift: false };
+
+        // Three.js setup
         const scene = new THREE.Scene();
-        const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+        scene.background = new THREE.Color('#1a1a1a');
+
+        const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 0.1, 1000);
         camera.position.set(5, 5, 5);
 
         const renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.setPixelRatio(window.devicePixelRatio);
-        renderer.shadowMap.enabled = true;
-        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-        renderer.outputColorSpace = THREE.SRGBColorSpace;
-        renderer.toneMapping = THREE.ACESFilmicToneMapping;
-        renderer.toneMappingExposure = 1;
-        container.appendChild(renderer.domElement);
+        Object.assign(renderer, {
+            shadowMap: { enabled: true, type: THREE.PCFSoftShadowMap },
+            outputColorSpace: THREE.SRGBColorSpace,
+            toneMapping: THREE.ACESFilmicToneMapping,
+            toneMappingExposure: 1,
+        });
+        renderer.setSize(innerWidth, innerHeight);
+        renderer.setPixelRatio(devicePixelRatio);
+        dom.container.appendChild(renderer.domElement);
 
         // Controls
         const controls = new OrbitControls(camera, renderer.domElement);
-        controls.enableDamping = true;
-        controls.dampingFactor = 0.05;
-        controls.screenSpacePanning = true;
-        controls.minDistance = 0.1;
-        controls.maxDistance = 500;
-        controls.addEventListener('change', () => typeof scheduleURLUpdate !== 'undefined' && scheduleURLUpdate());
+        Object.assign(controls, {
+            enableDamping: true,
+            dampingFactor: 0.05,
+            screenSpacePanning: true,
+            minDistance: 0.1,
+            maxDistance: 500,
+        });
+        controls.addEventListener('change', () => scheduleURLUpdate?.());
 
-        // Raycaster for Ctrl+click pivot
-        const raycaster = new THREE.Raycaster();
-        const mouse = new THREE.Vector2();
+        // Lights
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+        directionalLight.position.set(5, 10, 7.5);
+        directionalLight.castShadow = true;
+        Object.assign(directionalLight.shadow, {
+            mapSize: { width: 2048, height: 2048 },
+            camera: { near: 0.1, far: 50, left: -10, right: 10, top: 10, bottom: -10 },
+        });
+        scene.add(ambientLight, directionalLight);
 
-        // Pivot point marker
+        // Helpers
+        const gridHelper = new THREE.GridHelper(20, 20, 0x444444, 0x333333);
+        const axesHelper = new THREE.AxesHelper(5);
+        scene.add(gridHelper, axesHelper);
+
+        // Pivot marker
         const pivotMarker = new THREE.Mesh(
             new THREE.SphereGeometry(0.1, 16, 16),
             new THREE.MeshBasicMaterial({ color: 0xff4444, transparent: true, opacity: 0.8 })
@@ -459,267 +511,119 @@
         pivotMarker.visible = false;
         scene.add(pivotMarker);
 
-        // Ctrl+click to set pivot point on surface
-        renderer.domElement.addEventListener('mousedown', (e) => {
-            if (!e.ctrlKey && !e.metaKey) return;
-            if (!currentModel) return;
+        // Raycaster
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
 
-            const rect = renderer.domElement.getBoundingClientRect();
-            mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-            mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-
-            raycaster.setFromCamera(mouse, camera);
-            const intersects = raycaster.intersectObject(currentModel, true);
-
-            if (intersects.length > 0) {
-                const point = intersects[0].point;
-                controls.target.copy(point);
-                controls.update();
-
-                // Show pivot marker briefly
-                pivotMarker.position.copy(point);
-                pivotMarker.visible = true;
-                setTimeout(() => { pivotMarker.visible = false; }, 1500);
-
-                scheduleURLUpdate();
-            }
-        });
-
-        // Lights
-        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
-        scene.add(ambientLight);
-
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-        directionalLight.position.set(5, 10, 7.5);
-        directionalLight.castShadow = true;
-        directionalLight.shadow.mapSize.width = 2048;
-        directionalLight.shadow.mapSize.height = 2048;
-        directionalLight.shadow.camera.near = 0.1;
-        directionalLight.shadow.camera.far = 50;
-        directionalLight.shadow.camera.left = -10;
-        directionalLight.shadow.camera.right = 10;
-        directionalLight.shadow.camera.top = 10;
-        directionalLight.shadow.camera.bottom = -10;
-        scene.add(directionalLight);
-
-        // Helpers
-        const gridHelper = new THREE.GridHelper(20, 20, 0x444444, 0x333333);
-        scene.add(gridHelper);
-
-        const axesHelper = new THREE.AxesHelper(5);
-        scene.add(axesHelper);
-
-        let boundingBoxHelper = null;
-
-        // Loader setup
-        const loader = new GLTFLoader();
+        // Loader
         const dracoLoader = new DRACOLoader();
         dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
+        const loader = new GLTFLoader();
         loader.setDRACOLoader(dracoLoader);
 
-        // Current model
-        let currentModel = null;
-
-        // Camera presets per model
-        const cameraPresets = {
-            '1.glb': { pos: [17.77, 16.52, -4.36], target: [-0.63, -2.23, 1.65] },
-            '2.glb': { pos: [5.92, 5.00, 6.77], target: [-0.16, -0.75, 0.03] },
-            '3.glb': { pos: [6.86, 3.29, 7.76], target: [-1.9, -2.79, -1.66] },
-        };
-
-        // URL state encoding (binary packed, URL-safe base64)
-        // Format: model(4bit) + fov(7bit) + 6 floats as 16-bit signed ints (×100)
-        // Total: 14 bytes → ~19 chars
+        // URL encoding (binary packed, URL-safe base64)
         const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
         const B64_INV = Object.fromEntries([...B64].map((c, i) => [c, i]));
 
+        const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+        const toSigned16 = v => clamp(Math.round(v * 100), -32768, 32767);
+        const toUnsigned = v => v < 0 ? v + 65536 : v;
+        const fromUnsigned = v => v > 32767 ? v - 65536 : v;
+
         function encodeState(model, pos, target, fov) {
-            const modelId = parseInt(model.replace('.glb', '')) - 1;
-            const fovVal = Math.max(20, Math.min(120, Math.round(fov))) - 20; // 0-100 range
+            const modelId = parseInt(model) - 1;
+            const fovVal = clamp(Math.round(fov), 20, 120) - 20;
             const floats = [pos.x, pos.y, pos.z, target.x, target.y, target.z];
 
-            // Pack into bytes: [modelId<<4 | fov>>3, fov<<5 | float0_hi, ...]
             const bytes = new Uint8Array(14);
             bytes[0] = (modelId << 4) | (fovVal >> 3);
             bytes[1] = (fovVal << 5) & 0xFF;
 
-            let bitPos = 3; // bits remaining in bytes[1]
-            let bytePos = 1;
-
+            let bitPos = 3, bytePos = 1;
             for (const f of floats) {
-                const val = Math.max(-32768, Math.min(32767, Math.round(f * 100)));
-                const uval = val < 0 ? val + 65536 : val; // Convert to unsigned
-
-                // Write 16 bits
+                const uval = toUnsigned(toSigned16(f));
                 bytes[bytePos] |= (uval >> (16 - bitPos)) & 0xFF;
                 bytePos++;
-                if (bitPos < 8) {
-                    bytes[bytePos] = (uval >> (8 - bitPos)) & 0xFF;
-                    bytePos++;
-                }
+                if (bitPos < 8) { bytes[bytePos] = (uval >> (8 - bitPos)) & 0xFF; bytePos++; }
                 bytes[bytePos] = (uval << bitPos) & 0xFF;
-                // bitPos stays the same since we wrote 16 bits
             }
 
-            // Encode to URL-safe base64
             let result = '';
-            for (let i = 0; i < bytes.length; i += 3) {
-                const b0 = bytes[i], b1 = bytes[i+1] || 0, b2 = bytes[i+2] || 0;
-                result += B64[b0 >> 2];
-                result += B64[((b0 & 3) << 4) | (b1 >> 4)];
-                if (i + 1 < bytes.length) result += B64[((b1 & 15) << 2) | (b2 >> 6)];
-                if (i + 2 < bytes.length) result += B64[b2 & 63];
+            for (let i = 0; i < 14; i += 3) {
+                const [b0, b1, b2] = [bytes[i], bytes[i + 1] ?? 0, bytes[i + 2] ?? 0];
+                result += B64[b0 >> 2] + B64[((b0 & 3) << 4) | (b1 >> 4)];
+                if (i + 1 < 14) result += B64[((b1 & 15) << 2) | (b2 >> 6)];
+                if (i + 2 < 14) result += B64[b2 & 63];
             }
             return result;
         }
 
         function decodeState(str) {
+            if (str?.length < 19) return null;
             try {
-                if (str.length < 19) return null;
-
-                // Decode URL-safe base64
                 const bytes = new Uint8Array(14);
                 for (let i = 0, j = 0; i < str.length && j < 14; i += 4) {
-                    const b0 = B64_INV[str[i]], b1 = B64_INV[str[i+1]] || 0;
-                    const b2 = B64_INV[str[i+2]] || 0, b3 = B64_INV[str[i+3]] || 0;
+                    const [b0, b1, b2, b3] = [B64_INV[str[i]], B64_INV[str[i + 1]] ?? 0, B64_INV[str[i + 2]] ?? 0, B64_INV[str[i + 3]] ?? 0];
                     bytes[j++] = (b0 << 2) | (b1 >> 4);
                     if (j < 14) bytes[j++] = ((b1 & 15) << 4) | (b2 >> 2);
                     if (j < 14) bytes[j++] = ((b2 & 3) << 6) | b3;
                 }
 
                 const modelId = bytes[0] >> 4;
-                const fovVal = ((bytes[0] & 0xF) << 3) | (bytes[1] >> 5);
-                const fov = fovVal + 20;
+                const fov = (((bytes[0] & 0xF) << 3) | (bytes[1] >> 5)) + 20;
 
                 const floats = [];
-                let bitPos = 3;
-                let bytePos = 1;
-
+                let bitPos = 3, bytePos = 1;
                 for (let i = 0; i < 6; i++) {
                     let uval = (bytes[bytePos] << (16 - bitPos)) & 0xFFFF;
                     bytePos++;
-                    if (bitPos < 8) {
-                        uval |= (bytes[bytePos] << (8 - bitPos)) & 0xFFFF;
-                        bytePos++;
-                    }
+                    if (bitPos < 8) { uval |= (bytes[bytePos] << (8 - bitPos)) & 0xFFFF; bytePos++; }
                     uval |= bytes[bytePos] >> bitPos;
-
-                    const val = uval > 32767 ? uval - 65536 : uval;
-                    floats.push(val / 100);
+                    floats.push(fromUnsigned(uval) / 100);
                 }
 
                 return {
-                    model: (modelId + 1) + '.glb',
+                    model: `${modelId + 1}.glb`,
                     fov,
                     pos: { x: floats[0], y: floats[1], z: floats[2] },
-                    target: { x: floats[3], y: floats[4], z: floats[5] }
+                    target: { x: floats[3], y: floats[4], z: floats[5] },
                 };
             } catch { return null; }
         }
 
+        const getURLState = () => decodeState(new URLSearchParams(location.search).get('v'));
+
         function updateURL() {
-            const model = document.getElementById('model-select').value;
+            const model = dom.modelSelect.value;
             if (!model) return;
             const state = encodeState(model, camera.position, controls.target, camera.fov);
-            const url = new URL(window.location);
-            url.searchParams.set('v', state);
-            history.replaceState(null, '', url);
+            history.replaceState(null, '', `?v=${state}`);
         }
 
-        function getURLState() {
-            const params = new URLSearchParams(window.location.search);
-            return params.get('v') ? decodeState(params.get('v')) : null;
-        }
-
-        let urlUpdateTimeout;
         function scheduleURLUpdate() {
             clearTimeout(urlUpdateTimeout);
             urlUpdateTimeout = setTimeout(updateURL, 500);
         }
 
-        function applyCameraPreset(filename) {
-            const urlState = getURLState();
-            if (urlState && urlState.model === filename) {
-                camera.position.set(urlState.pos.x, urlState.pos.y, urlState.pos.z);
-                controls.target.set(urlState.target.x, urlState.target.y, urlState.target.z);
-                camera.fov = urlState.fov;
-                camera.updateProjectionMatrix();
-                // Sync FOV UI
-                document.getElementById('fov').value = urlState.fov;
-                document.getElementById('fov-num').value = urlState.fov;
-                controls.update();
-            } else {
-                const preset = cameraPresets[filename];
-                if (preset) {
-                    camera.position.set(...preset.pos);
-                    controls.target.set(...preset.target);
-                    controls.update();
-                } else {
-                    fitCameraToModel();
-                }
-            }
-            updateURL();
-        }
-
-        // Model list (static for GitHub Pages, or fetched from server)
-        const staticModels = [
-            { name: 'Wat Mahathat', filename: '1.glb' },
-            { name: 'Wat Yai Chai Mongkhon', filename: '2.glb' },
-            { name: 'Wat Chaiwatthanaram', filename: '3.glb' },
-        ];
-
-        // Detect if running on GitHub Pages or local server
-        const isGitHubPages = window.location.hostname.includes('github.io');
+        // Model loading
+        const isGitHubPages = location.hostname.includes('github.io');
         const modelBasePath = isGitHubPages ? '.' : '/models';
 
-        // Load models list
-        async function loadModelsList() {
-            let models = staticModels;
-
-            // Try fetching from server if not on GitHub Pages
-            if (!isGitHubPages) {
-                try {
-                    const response = await fetch('/models');
-                    if (response.ok) models = await response.json();
-                } catch (e) { /* Use static list */ }
-            }
-
-            const select = document.getElementById('model-select');
-            models.forEach(model => {
-                const option = document.createElement('option');
-                option.value = model.filename;
-                option.textContent = model.name;
-                select.appendChild(option);
+        function disposeModel(model) {
+            model?.traverse(child => {
+                child.geometry?.dispose();
+                [].concat(child.material ?? []).forEach(m => m.dispose());
             });
-            // Load from URL state or default to first model
-            const urlState = getURLState();
-            const initialModel = urlState ? urlState.model : models[0]?.filename;
-            if (initialModel && models.some(m => m.filename === initialModel)) {
-                select.value = initialModel;
-                loadModel(initialModel);
-            }
         }
 
-        // Load a model
         function loadModel(filename) {
             if (!filename) return;
-
-            document.getElementById('loading').style.display = 'block';
+            dom.loading.style.display = 'block';
 
             if (currentModel) {
                 scene.remove(currentModel);
-                currentModel.traverse(child => {
-                    if (child.geometry) child.geometry.dispose();
-                    if (child.material) {
-                        if (Array.isArray(child.material)) {
-                            child.material.forEach(m => m.dispose());
-                        } else {
-                            child.material.dispose();
-                        }
-                    }
-                });
+                disposeModel(currentModel);
             }
-
             if (boundingBoxHelper) {
                 scene.remove(boundingBoxHelper);
                 boundingBoxHelper = null;
@@ -727,331 +631,281 @@
 
             loader.load(
                 `${modelBasePath}/${filename}`,
-                (gltf) => {
-                    currentModel = gltf.scene;
-                    currentModel.traverse(child => {
-                        if (child.isMesh) {
-                            child.castShadow = true;
-                            child.receiveShadow = true;
-                        }
+                ({ scene: model }) => {
+                    currentModel = model;
+                    model.traverse(child => {
+                        if (child.isMesh) child.castShadow = child.receiveShadow = true;
                     });
-                    scene.add(currentModel);
-
+                    scene.add(model);
                     updateModelInfo();
                     resetTransform();
                     applyCameraPreset(filename);
                     updateBoundingBox();
-
-                    document.getElementById('loading').style.display = 'none';
+                    dom.loading.style.display = 'none';
                 },
-                (progress) => {
-                    // Progress callback
-                },
-                (error) => {
-                    console.error('Error loading model:', error);
-                    document.getElementById('loading').style.display = 'none';
-                    alert('Error loading model: ' + error.message);
+                null,
+                err => {
+                    console.error('Error loading model:', err);
+                    dom.loading.style.display = 'none';
+                    alert(`Error loading model: ${err.message}`);
                 }
             );
         }
 
-        // Update model info
-        function updateModelInfo() {
-            if (!currentModel) return;
-
-            let vertices = 0, triangles = 0, meshes = 0;
-            const materials = new Set();
-            const textures = new Set();
-
-            currentModel.traverse(child => {
-                if (child.isMesh) {
-                    meshes++;
-                    if (child.geometry) {
-                        const geo = child.geometry;
-                        vertices += geo.attributes.position ? geo.attributes.position.count : 0;
-                        triangles += geo.index ? geo.index.count / 3 : (geo.attributes.position ? geo.attributes.position.count / 3 : 0);
-                    }
-                    if (child.material) {
-                        const mats = Array.isArray(child.material) ? child.material : [child.material];
-                        mats.forEach(m => {
-                            materials.add(m.uuid);
-                            ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap'].forEach(prop => {
-                                if (m[prop]) textures.add(m[prop].uuid);
-                            });
-                        });
-                    }
+        function applyCameraPreset(filename) {
+            const urlState = getURLState();
+            if (urlState?.model === filename) {
+                const { pos, target, fov } = urlState;
+                camera.position.set(pos.x, pos.y, pos.z);
+                controls.target.set(target.x, target.y, target.z);
+                camera.fov = fov;
+                camera.updateProjectionMatrix();
+                $('fov').value = $('fov-num').value = fov;
+            } else {
+                const preset = CONFIG.presets[filename];
+                if (preset) {
+                    camera.position.set(...preset.pos);
+                    controls.target.set(...preset.target);
+                } else {
+                    fitCameraToModel();
                 }
-            });
-
-            document.getElementById('info-vertices').textContent = vertices.toLocaleString();
-            document.getElementById('info-triangles').textContent = Math.floor(triangles).toLocaleString();
-            document.getElementById('info-meshes').textContent = meshes;
-            document.getElementById('info-materials').textContent = materials.size;
-            document.getElementById('info-textures').textContent = textures.size;
+            }
+            controls.update();
+            updateURL();
         }
 
-        // Fit camera to model
+        async function loadModelsList() {
+            let models = CONFIG.models;
+            if (!isGitHubPages) {
+                try {
+                    const res = await fetch('/models');
+                    if (res.ok) models = await res.json();
+                } catch {}
+            }
+
+            models.forEach(({ name, filename }) => {
+                const opt = document.createElement('option');
+                opt.value = filename;
+                opt.textContent = name;
+                dom.modelSelect.appendChild(opt);
+            });
+
+            const urlState = getURLState();
+            const initial = urlState?.model ?? models[0]?.filename;
+            if (initial && models.some(m => m.filename === initial)) {
+                dom.modelSelect.value = initial;
+                loadModel(initial);
+            }
+        }
+
+        // Model utilities
+        function updateModelInfo() {
+            if (!currentModel) return;
+            let vertices = 0, triangles = 0, meshes = 0;
+            const materials = new Set(), textures = new Set();
+
+            currentModel.traverse(child => {
+                if (!child.isMesh) return;
+                meshes++;
+                const geo = child.geometry;
+                vertices += geo?.attributes.position?.count ?? 0;
+                triangles += geo?.index?.count / 3 ?? geo?.attributes.position?.count / 3 ?? 0;
+
+                [].concat(child.material ?? []).forEach(m => {
+                    materials.add(m.uuid);
+                    ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap']
+                        .forEach(p => m[p] && textures.add(m[p].uuid));
+                });
+            });
+
+            $('info-vertices').textContent = vertices.toLocaleString();
+            $('info-triangles').textContent = Math.floor(triangles).toLocaleString();
+            $('info-meshes').textContent = meshes;
+            $('info-materials').textContent = materials.size;
+            $('info-textures').textContent = textures.size;
+        }
+
         function fitCameraToModel() {
             if (!currentModel) return;
-
             const box = new THREE.Box3().setFromObject(currentModel);
             const center = box.getCenter(new THREE.Vector3());
             const size = box.getSize(new THREE.Vector3());
-
-            const maxDim = Math.max(size.x, size.y, size.z);
-            const fov = camera.fov * (Math.PI / 180);
-            let cameraZ = Math.abs(maxDim / Math.sin(fov / 2)) * 1.2;
-
-            camera.position.set(center.x + cameraZ * 0.5, center.y + cameraZ * 0.5, center.z + cameraZ);
+            const dist = Math.max(...size.toArray()) / Math.sin(camera.fov * Math.PI / 360) * 1.2;
+            camera.position.set(center.x + dist * 0.5, center.y + dist * 0.5, center.z + dist);
             controls.target.copy(center);
             controls.update();
         }
 
-        // Reset transform
         function resetTransform() {
             if (!currentModel) return;
-
             currentModel.position.set(0, 0, 0);
             currentModel.rotation.set(0, 0, 0);
             currentModel.scale.set(1, 1, 1);
 
-            ['pos-x', 'pos-y', 'pos-z'].forEach(id => {
-                document.getElementById(id).value = 0;
-                document.getElementById(id + '-num').value = 0;
+            ['pos-x', 'pos-y', 'pos-z', 'rot-x', 'rot-y', 'rot-z'].forEach(id => {
+                $(id).value = $(`${id}-num`).value = 0;
             });
-            ['rot-x', 'rot-y', 'rot-z'].forEach(id => {
-                document.getElementById(id).value = 0;
-                document.getElementById(id + '-num').value = 0;
-            });
-            document.getElementById('scale').value = 1;
-            document.getElementById('scale-num').value = 1;
-
+            $('scale').value = $('scale-num').value = 1;
             updateBoundingBox();
         }
 
-        // Reset camera
-        function resetCamera() {
-            camera.position.set(5, 5, 5);
-            controls.target.set(0, 0, 0);
-            controls.update();
-        }
-
-        // Update bounding box
         function updateBoundingBox() {
-            if (boundingBoxHelper) {
-                scene.remove(boundingBoxHelper);
-            }
-
-            if (currentModel && document.getElementById('bounding-box').checked) {
-                const box = new THREE.Box3().setFromObject(currentModel);
-                boundingBoxHelper = new THREE.Box3Helper(box, 0x00ff00);
+            if (boundingBoxHelper) scene.remove(boundingBoxHelper);
+            boundingBoxHelper = null;
+            if (currentModel && $('bounding-box').checked) {
+                boundingBoxHelper = new THREE.Box3Helper(new THREE.Box3().setFromObject(currentModel), 0x00ff00);
                 scene.add(boundingBoxHelper);
             }
         }
 
-        // Set wireframe
         function setWireframe(enabled) {
-            if (!currentModel) return;
-            currentModel.traverse(child => {
-                if (child.isMesh && child.material) {
-                    const mats = Array.isArray(child.material) ? child.material : [child.material];
-                    mats.forEach(m => m.wireframe = enabled);
-                }
+            currentModel?.traverse(child => {
+                if (child.isMesh) [].concat(child.material ?? []).forEach(m => m.wireframe = enabled);
             });
         }
 
-        // Link slider and number input
-        function linkInputs(sliderId, numberId, callback) {
-            const slider = document.getElementById(sliderId);
-            const number = document.getElementById(numberId);
-
-            slider.addEventListener('input', () => {
-                number.value = slider.value;
-                callback(parseFloat(slider.value));
-            });
-
-            number.addEventListener('change', () => {
-                slider.value = number.value;
-                callback(parseFloat(number.value));
-            });
+        // UI setup
+        function linkInputs(sliderId, callback) {
+            const slider = $(sliderId), num = $(`${sliderId}-num`);
+            on(slider, 'input', () => { num.value = slider.value; callback(+slider.value); });
+            on(num, 'change', () => { slider.value = num.value; callback(+num.value); });
         }
 
-        // Setup controls
-        function setupControls() {
-            // Model select
-            document.getElementById('model-select').addEventListener('change', (e) => {
-                loadModel(e.target.value);
-            });
+        function setupUI() {
+            on('model-select', 'change', e => loadModel(e.target.value));
+            on('reload-btn', 'click', () => dom.modelSelect.value && loadModel(dom.modelSelect.value));
 
-            document.getElementById('reload-btn').addEventListener('click', () => {
-                const select = document.getElementById('model-select');
-                if (select.value) loadModel(select.value);
-            });
+            // Display
+            on('wireframe', 'change', e => setWireframe(e.target.checked));
+            on('grid', 'change', e => gridHelper.visible = e.target.checked);
+            on('axes', 'change', e => axesHelper.visible = e.target.checked);
+            on('bounding-box', 'change', updateBoundingBox);
+            on('auto-rotate', 'change', e => controls.autoRotate = e.target.checked);
+            on('bg-color', 'input', e => scene.background = new THREE.Color(e.target.value));
 
-            // Display toggles
-            document.getElementById('wireframe').addEventListener('change', (e) => setWireframe(e.target.checked));
-            document.getElementById('grid').addEventListener('change', (e) => gridHelper.visible = e.target.checked);
-            document.getElementById('axes').addEventListener('change', (e) => axesHelper.visible = e.target.checked);
-            document.getElementById('bounding-box').addEventListener('change', updateBoundingBox);
-            document.getElementById('auto-rotate').addEventListener('change', (e) => controls.autoRotate = e.target.checked);
+            // Transform
+            const updatePos = axis => v => { if (currentModel) { currentModel.position[axis] = v; updateBoundingBox(); } };
+            const updateRot = axis => v => { if (currentModel) { currentModel.rotation[axis] = THREE.MathUtils.degToRad(v); updateBoundingBox(); } };
+            linkInputs('pos-x', updatePos('x'));
+            linkInputs('pos-y', updatePos('y'));
+            linkInputs('pos-z', updatePos('z'));
+            linkInputs('rot-x', updateRot('x'));
+            linkInputs('rot-y', updateRot('y'));
+            linkInputs('rot-z', updateRot('z'));
+            linkInputs('scale', v => { if (currentModel) { currentModel.scale.setScalar(v); updateBoundingBox(); } });
+            on('reset-transform', 'click', resetTransform);
 
-            document.getElementById('bg-color').addEventListener('input', (e) => {
-                scene.background = new THREE.Color(e.target.value);
-            });
-            scene.background = new THREE.Color('#1a1a1a');
-
-            // Transform controls
-            linkInputs('pos-x', 'pos-x-num', v => { if (currentModel) { currentModel.position.x = v; updateBoundingBox(); } });
-            linkInputs('pos-y', 'pos-y-num', v => { if (currentModel) { currentModel.position.y = v; updateBoundingBox(); } });
-            linkInputs('pos-z', 'pos-z-num', v => { if (currentModel) { currentModel.position.z = v; updateBoundingBox(); } });
-            linkInputs('rot-x', 'rot-x-num', v => { if (currentModel) { currentModel.rotation.x = THREE.MathUtils.degToRad(v); updateBoundingBox(); } });
-            linkInputs('rot-y', 'rot-y-num', v => { if (currentModel) { currentModel.rotation.y = THREE.MathUtils.degToRad(v); updateBoundingBox(); } });
-            linkInputs('rot-z', 'rot-z-num', v => { if (currentModel) { currentModel.rotation.z = THREE.MathUtils.degToRad(v); updateBoundingBox(); } });
-            linkInputs('scale', 'scale-num', v => { if (currentModel) { currentModel.scale.setScalar(v); updateBoundingBox(); } });
-
-            document.getElementById('reset-transform').addEventListener('click', resetTransform);
-
-            // Lighting controls
-            linkInputs('ambient-intensity', 'ambient-intensity-num', v => ambientLight.intensity = v);
-            document.getElementById('ambient-color').addEventListener('input', (e) => ambientLight.color.set(e.target.value));
-            linkInputs('dir-intensity', 'dir-intensity-num', v => directionalLight.intensity = v);
-            document.getElementById('dir-color').addEventListener('input', (e) => directionalLight.color.set(e.target.value));
-            document.getElementById('shadows').addEventListener('change', (e) => {
+            // Lighting
+            linkInputs('ambient-intensity', v => ambientLight.intensity = v);
+            linkInputs('dir-intensity', v => directionalLight.intensity = v);
+            on('ambient-color', 'input', e => ambientLight.color.set(e.target.value));
+            on('dir-color', 'input', e => directionalLight.color.set(e.target.value));
+            on('shadows', 'change', e => {
                 renderer.shadowMap.enabled = e.target.checked;
-                if (currentModel) {
-                    currentModel.traverse(child => {
-                        if (child.isMesh) {
-                            child.castShadow = e.target.checked;
-                            child.receiveShadow = e.target.checked;
-                        }
-                    });
-                }
+                currentModel?.traverse(c => { if (c.isMesh) c.castShadow = c.receiveShadow = e.target.checked; });
             });
 
-            // Camera controls
-            linkInputs('fov', 'fov-num', v => { camera.fov = v; camera.updateProjectionMatrix(); });
-            linkInputs('near', 'near-num', v => { camera.near = v; camera.updateProjectionMatrix(); });
-            linkInputs('far', 'far-num', v => { camera.far = v; camera.updateProjectionMatrix(); });
-
-            document.getElementById('reset-camera').addEventListener('click', resetCamera);
-            document.getElementById('fit-camera').addEventListener('click', fitCameraToModel);
+            // Camera
+            linkInputs('fov', v => { camera.fov = v; camera.updateProjectionMatrix(); });
+            linkInputs('near', v => { camera.near = v; camera.updateProjectionMatrix(); });
+            linkInputs('far', v => { camera.far = v; camera.updateProjectionMatrix(); });
+            on('reset-camera', 'click', () => { camera.position.set(5, 5, 5); controls.target.set(0, 0, 0); controls.update(); });
+            on('fit-camera', 'click', fitCameraToModel);
 
             // Panel toggle
-            const controlsPanel = document.getElementById('controls');
-            document.getElementById('toggle-panel').addEventListener('click', () => controlsPanel.classList.add('hidden'));
-            document.getElementById('show-panel').addEventListener('click', () => controlsPanel.classList.remove('hidden'));
+            on('toggle-panel', 'click', () => dom.controls.classList.add('hidden'));
+            on('show-panel', 'click', () => dom.controls.classList.remove('hidden'));
         }
 
-        // WASD movement
-        const keys = { w: false, a: false, s: false, d: false, space: false, shift: false };
-        const moveSpeed = 0.1;
+        // Input handling
+        function setupInput() {
+            on(document, 'keydown', e => {
+                const key = e.key.toLowerCase();
+                if (key in keys) keys[key] = true;
+                if (e.key === 'Shift') keys.shift = true;
+                if (e.key === ' ') { keys.space = true; e.preventDefault(); }
+                if (key === 'h') dom.controls.classList.toggle('hidden');
+            });
 
-        document.addEventListener('keydown', (e) => {
-            const key = e.key.toLowerCase();
-            if (key in keys) keys[key] = true;
-            if (e.key === 'Shift') keys.shift = true;
-            if (e.key === ' ') { keys.space = true; e.preventDefault(); }
-            if (key === 'h') document.getElementById('controls').classList.toggle('hidden');
-        });
+            on(document, 'keyup', e => {
+                const key = e.key.toLowerCase();
+                if (key in keys) keys[key] = false;
+                if (e.key === 'Shift') keys.shift = false;
+                if (e.key === ' ') keys.space = false;
+            });
 
-        document.addEventListener('keyup', (e) => {
-            const key = e.key.toLowerCase();
-            if (key in keys) keys[key] = false;
-            if (e.key === 'Shift') keys.shift = false;
-            if (e.key === ' ') keys.space = false;
-        });
+            on(window, 'blur', () => Object.keys(keys).forEach(k => keys[k] = false));
 
-        // Release all keys when window loses focus
-        window.addEventListener('blur', () => {
-            Object.keys(keys).forEach(k => keys[k] = false);
-        });
+            // Ctrl+click pivot
+            on(renderer.domElement, 'mousedown', e => {
+                if ((!e.ctrlKey && !e.metaKey) || !currentModel) return;
+                const rect = renderer.domElement.getBoundingClientRect();
+                mouse.set((e.clientX - rect.left) / rect.width * 2 - 1, -(e.clientY - rect.top) / rect.height * 2 + 1);
+                raycaster.setFromCamera(mouse, camera);
+                const [hit] = raycaster.intersectObject(currentModel, true);
+                if (hit) {
+                    controls.target.copy(hit.point);
+                    controls.update();
+                    pivotMarker.position.copy(hit.point);
+                    pivotMarker.visible = true;
+                    setTimeout(() => pivotMarker.visible = false, 1500);
+                    scheduleURLUpdate();
+                }
+            });
 
-        function updateMovement() {
-            const speed = moveSpeed;
-            const direction = new THREE.Vector3();
-            camera.getWorldDirection(direction);
-            direction.y = 0;
-            direction.normalize();
+            on(window, 'resize', () => {
+                camera.aspect = innerWidth / innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(innerWidth, innerHeight);
+            });
+        }
 
-            const right = new THREE.Vector3();
+        // Animation
+        const direction = new THREE.Vector3();
+        const right = new THREE.Vector3();
+        let frameCount = 0, lastTime = performance.now();
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // WASD movement
+            const { moveSpeed } = CONFIG;
+            camera.getWorldDirection(direction).setY(0).normalize();
             right.crossVectors(direction, camera.up).normalize();
 
-            if (keys.w) {
-                camera.position.addScaledVector(direction, speed);
-                controls.target.addScaledVector(direction, speed);
-            }
-            if (keys.s) {
-                camera.position.addScaledVector(direction, -speed);
-                controls.target.addScaledVector(direction, -speed);
-            }
-            if (keys.a) {
-                camera.position.addScaledVector(right, -speed);
-                controls.target.addScaledVector(right, -speed);
-            }
-            if (keys.d) {
-                camera.position.addScaledVector(right, speed);
-                controls.target.addScaledVector(right, speed);
-            }
-            if (keys.shift) {
-                camera.position.y -= speed;
-                controls.target.y -= speed;
-            }
-            if (keys.space) {
-                camera.position.y += speed;
-                controls.target.y += speed;
-            }
-        }
+            if (keys.w) { camera.position.addScaledVector(direction, moveSpeed); controls.target.addScaledVector(direction, moveSpeed); }
+            if (keys.s) { camera.position.addScaledVector(direction, -moveSpeed); controls.target.addScaledVector(direction, -moveSpeed); }
+            if (keys.a) { camera.position.addScaledVector(right, -moveSpeed); controls.target.addScaledVector(right, -moveSpeed); }
+            if (keys.d) { camera.position.addScaledVector(right, moveSpeed); controls.target.addScaledVector(right, moveSpeed); }
+            if (keys.shift) { camera.position.y -= moveSpeed; controls.target.y -= moveSpeed; }
+            if (keys.space) { camera.position.y += moveSpeed; controls.target.y += moveSpeed; }
 
-        // FPS counter
-        let frameCount = 0;
-        let lastTime = performance.now();
+            controls.update();
+            renderer.render(scene, camera);
 
-        function updateFPS() {
+            // FPS counter
             frameCount++;
             const now = performance.now();
             if (now - lastTime >= 1000) {
-                document.getElementById('fps').textContent = frameCount;
+                dom.fps.textContent = frameCount;
                 frameCount = 0;
                 lastTime = now;
             }
+
+            // Camera info
+            const { x: px, y: py, z: pz } = camera.position;
+            const { x: tx, y: ty, z: tz } = controls.target;
+            dom.camPos.textContent = `${px.toFixed(2)}, ${py.toFixed(2)}, ${pz.toFixed(2)}`;
+            dom.camTarget.textContent = `${tx.toFixed(2)}, ${ty.toFixed(2)}, ${tz.toFixed(2)}`;
         }
 
-        // Camera info update
-        function updateCameraInfo() {
-            const p = camera.position;
-            const t = controls.target;
-            document.getElementById('cam-pos').textContent =
-                `${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}`;
-            document.getElementById('cam-target').textContent =
-                `${t.x.toFixed(2)}, ${t.y.toFixed(2)}, ${t.z.toFixed(2)}`;
-        }
-
-        // Animation loop
-        function animate() {
-            requestAnimationFrame(animate);
-            updateMovement();
-            controls.update();
-            renderer.render(scene, camera);
-            updateFPS();
-            updateCameraInfo();
-        }
-
-        // Handle resize
-        window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        });
-
-        // Initialize
-        setupControls();
+        // Init
+        setupUI();
+        setupInput();
         loadModelsList();
         animate();
 
-        // Register service worker
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('./sw.js').catch(() => {});
-        }
+        if ('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js').catch(() => {});
     </script>
 </body>
 </html>
