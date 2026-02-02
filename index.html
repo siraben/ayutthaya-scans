@@ -527,22 +527,92 @@
             '3.glb': { pos: [6.86, 3.29, 7.76], target: [-1.9, -2.79, -1.66] },
         };
 
-        // URL state encoding (compact base64)
-        function encodeState(model, pos, target) {
-            const nums = [pos.x, pos.y, pos.z, target.x, target.y, target.z].map(n => Math.round(n * 100) / 100);
-            const data = model.replace('.glb', '') + ',' + nums.join(',');
-            return btoa(data).replace(/=+$/, '');
+        // URL state encoding (binary packed, URL-safe base64)
+        // Format: model(4bit) + fov(7bit) + 6 floats as 16-bit signed ints (×100)
+        // Total: 14 bytes → ~19 chars
+        const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+        const B64_INV = Object.fromEntries([...B64].map((c, i) => [c, i]));
+
+        function encodeState(model, pos, target, fov) {
+            const modelId = parseInt(model.replace('.glb', '')) - 1;
+            const fovVal = Math.max(20, Math.min(120, Math.round(fov))) - 20; // 0-100 range
+            const floats = [pos.x, pos.y, pos.z, target.x, target.y, target.z];
+
+            // Pack into bytes: [modelId<<4 | fov>>3, fov<<5 | float0_hi, ...]
+            const bytes = new Uint8Array(14);
+            bytes[0] = (modelId << 4) | (fovVal >> 3);
+            bytes[1] = (fovVal << 5) & 0xFF;
+
+            let bitPos = 3; // bits remaining in bytes[1]
+            let bytePos = 1;
+
+            for (const f of floats) {
+                const val = Math.max(-32768, Math.min(32767, Math.round(f * 100)));
+                const uval = val < 0 ? val + 65536 : val; // Convert to unsigned
+
+                // Write 16 bits
+                bytes[bytePos] |= (uval >> (16 - bitPos)) & 0xFF;
+                bytePos++;
+                if (bitPos < 8) {
+                    bytes[bytePos] = (uval >> (8 - bitPos)) & 0xFF;
+                    bytePos++;
+                }
+                bytes[bytePos] = (uval << bitPos) & 0xFF;
+                // bitPos stays the same since we wrote 16 bits
+            }
+
+            // Encode to URL-safe base64
+            let result = '';
+            for (let i = 0; i < bytes.length; i += 3) {
+                const b0 = bytes[i], b1 = bytes[i+1] || 0, b2 = bytes[i+2] || 0;
+                result += B64[b0 >> 2];
+                result += B64[((b0 & 3) << 4) | (b1 >> 4)];
+                if (i + 1 < bytes.length) result += B64[((b1 & 15) << 2) | (b2 >> 6)];
+                if (i + 2 < bytes.length) result += B64[b2 & 63];
+            }
+            return result;
         }
 
         function decodeState(str) {
             try {
-                const data = atob(str + '=='.slice(0, (4 - str.length % 4) % 4));
-                const parts = data.split(',');
-                if (parts.length !== 7) return null;
+                if (str.length < 19) return null;
+
+                // Decode URL-safe base64
+                const bytes = new Uint8Array(14);
+                for (let i = 0, j = 0; i < str.length && j < 14; i += 4) {
+                    const b0 = B64_INV[str[i]], b1 = B64_INV[str[i+1]] || 0;
+                    const b2 = B64_INV[str[i+2]] || 0, b3 = B64_INV[str[i+3]] || 0;
+                    bytes[j++] = (b0 << 2) | (b1 >> 4);
+                    if (j < 14) bytes[j++] = ((b1 & 15) << 4) | (b2 >> 2);
+                    if (j < 14) bytes[j++] = ((b2 & 3) << 6) | b3;
+                }
+
+                const modelId = bytes[0] >> 4;
+                const fovVal = ((bytes[0] & 0xF) << 3) | (bytes[1] >> 5);
+                const fov = fovVal + 20;
+
+                const floats = [];
+                let bitPos = 3;
+                let bytePos = 1;
+
+                for (let i = 0; i < 6; i++) {
+                    let uval = (bytes[bytePos] << (16 - bitPos)) & 0xFFFF;
+                    bytePos++;
+                    if (bitPos < 8) {
+                        uval |= (bytes[bytePos] << (8 - bitPos)) & 0xFFFF;
+                        bytePos++;
+                    }
+                    uval |= bytes[bytePos] >> bitPos;
+
+                    const val = uval > 32767 ? uval - 65536 : uval;
+                    floats.push(val / 100);
+                }
+
                 return {
-                    model: parts[0] + '.glb',
-                    pos: { x: +parts[1], y: +parts[2], z: +parts[3] },
-                    target: { x: +parts[4], y: +parts[5], z: +parts[6] }
+                    model: (modelId + 1) + '.glb',
+                    fov,
+                    pos: { x: floats[0], y: floats[1], z: floats[2] },
+                    target: { x: floats[3], y: floats[4], z: floats[5] }
                 };
             } catch { return null; }
         }
@@ -550,7 +620,7 @@
         function updateURL() {
             const model = document.getElementById('model-select').value;
             if (!model) return;
-            const state = encodeState(model, camera.position, controls.target);
+            const state = encodeState(model, camera.position, controls.target, camera.fov);
             const url = new URL(window.location);
             url.searchParams.set('v', state);
             history.replaceState(null, '', url);
@@ -572,6 +642,11 @@
             if (urlState && urlState.model === filename) {
                 camera.position.set(urlState.pos.x, urlState.pos.y, urlState.pos.z);
                 controls.target.set(urlState.target.x, urlState.target.y, urlState.target.z);
+                camera.fov = urlState.fov;
+                camera.updateProjectionMatrix();
+                // Sync FOV UI
+                document.getElementById('fov').value = urlState.fov;
+                document.getElementById('fov-num').value = urlState.fov;
                 controls.update();
             } else {
                 const preset = cameraPresets[filename];
