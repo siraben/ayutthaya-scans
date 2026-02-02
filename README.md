@@ -1,6 +1,6 @@
 # Ayutthaya GLTF Viewer
 
-3D viewer for photogrammetry scans of temples from Ayutthaya, Thailand.
+3D viewer for interior scans from Ayutthaya, Thailand.
 
 ## Models
 
