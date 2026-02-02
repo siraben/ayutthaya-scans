@@ -178,13 +178,31 @@
         }
         .toggle-panel {
             position: absolute;
-            top: 10px;
-            left: 10px;
+            top: 15px;
+            left: 15px;
+            width: 40px;
+            height: 40px;
+            padding: 0;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
             z-index: 101;
             display: none;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        .toggle-panel:hover {
+            background: rgba(255, 255, 255, 0.25);
+        }
+        .toggle-panel::before {
+            content: '☰';
+            font-size: 18px;
+            color: rgba(255, 255, 255, 0.8);
         }
         #controls.hidden { display: none; }
-        #controls.hidden + .toggle-panel { display: block; }
+        #controls.hidden + .toggle-panel { display: flex; align-items: center; justify-content: center; }
         .vec3-row {
             display: flex;
             gap: 4px;
@@ -230,7 +248,10 @@
                 padding: 8px 12px;
             }
             .toggle-panel {
-                padding: 12px 16px;
+                top: 10px;
+                left: 10px;
+                width: 36px;
+                height: 36px;
             }
         }
 
@@ -399,7 +420,7 @@
         <button id="toggle-panel">Hide Panel (H)</button>
     </div>
 
-    <button class="toggle-panel" id="show-panel">Show Panel (H)</button>
+    <button class="toggle-panel" id="show-panel" title="Show Panel (H)"></button>
 
     <div id="stats">
         <div>FPS: <span id="fps">0</span></div>
