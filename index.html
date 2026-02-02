@@ -447,6 +447,44 @@
         controls.maxDistance = 500;
         controls.addEventListener('change', () => typeof scheduleURLUpdate !== 'undefined' && scheduleURLUpdate());
 
+        // Raycaster for Ctrl+click pivot
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+
+        // Pivot point marker
+        const pivotMarker = new THREE.Mesh(
+            new THREE.SphereGeometry(0.1, 16, 16),
+            new THREE.MeshBasicMaterial({ color: 0xff4444, transparent: true, opacity: 0.8 })
+        );
+        pivotMarker.visible = false;
+        scene.add(pivotMarker);
+
+        // Ctrl+click to set pivot point on surface
+        renderer.domElement.addEventListener('mousedown', (e) => {
+            if (!e.ctrlKey && !e.metaKey) return;
+            if (!currentModel) return;
+
+            const rect = renderer.domElement.getBoundingClientRect();
+            mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObject(currentModel, true);
+
+            if (intersects.length > 0) {
+                const point = intersects[0].point;
+                controls.target.copy(point);
+                controls.update();
+
+                // Show pivot marker briefly
+                pivotMarker.position.copy(point);
+                pivotMarker.visible = true;
+                setTimeout(() => { pivotMarker.visible = false; }, 1500);
+
+                scheduleURLUpdate();
+            }
+        });
+
         // Lights
         const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
         scene.add(ambientLight);

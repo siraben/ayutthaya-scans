@@ -22,6 +22,7 @@ Open http://localhost:5000
 ## Controls
 
 - **Mouse**: Rotate, pan, zoom
+- **Ctrl+Click**: Set pivot point on surface
 - **WASD**: Move
 - **Space/Shift**: Up/down
 - **H**: Toggle panel
