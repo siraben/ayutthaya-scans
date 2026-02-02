@@ -514,6 +514,7 @@
         let currentModel = null;
         let boundingBoxHelper = null;
         let urlUpdateTimeout;
+        let lastURLUpdate = 0;
         const keys = { w: false, a: false, s: false, d: false, space: false, shift: false };
 
         // Three.js setup
@@ -689,8 +690,17 @@
         }
 
         function scheduleURLUpdate() {
-            clearTimeout(urlUpdateTimeout);
-            urlUpdateTimeout = setTimeout(updateURL, 300);
+            const now = Date.now();
+            if (now - lastURLUpdate >= 300) {
+                lastURLUpdate = now;
+                updateURL();
+            } else if (!urlUpdateTimeout) {
+                urlUpdateTimeout = setTimeout(() => {
+                    urlUpdateTimeout = null;
+                    lastURLUpdate = Date.now();
+                    updateURL();
+                }, 300 - (now - lastURLUpdate));
+            }
         }
 
         // Model loading
