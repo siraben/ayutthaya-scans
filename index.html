@@ -1,0 +1,866 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ayutthaya 3D</title>
+    <meta name="description" content="3D LiDAR scans from Ayutthaya">
+    <meta property="og:title" content="Ayutthaya 3D">
+    <meta property="og:description" content="3D LiDAR scans from Ayutthaya">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            overflow: hidden;
+        }
+        #canvas-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(30, 30, 30, 0.95);
+            padding: 15px;
+            border-radius: 8px;
+            width: 280px;
+            max-height: calc(100vh - 20px);
+            overflow-y: auto;
+            z-index: 100;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            scrollbar-width: none;
+            -ms-overflow-style: none;
+        }
+        #controls::-webkit-scrollbar { display: none; }
+        #controls h2 {
+            font-size: 16px;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #444;
+            color: #fff;
+        }
+        .control-section {
+            margin-bottom: 15px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid #333;
+        }
+        .control-section:last-child { border-bottom: none; }
+        .control-section h3 {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #888;
+            margin-bottom: 10px;
+        }
+        .control-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .control-row label {
+            flex: 0 0 80px;
+            font-size: 12px;
+        }
+        .control-row input[type="range"] {
+            flex: 1;
+            margin: 0 8px;
+        }
+        .control-row input[type="number"] {
+            width: 55px;
+            background: #333;
+            border: 1px solid #555;
+            color: #fff;
+            padding: 4px;
+            border-radius: 4px;
+            font-size: 11px;
+        }
+        .control-row input[type="color"] {
+            width: 40px;
+            height: 26px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        select {
+            width: 100%;
+            padding: 8px;
+            background: #333;
+            border: 1px solid #555;
+            color: #fff;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-bottom: 8px;
+        }
+        button {
+            width: 100%;
+            padding: 8px 12px;
+            background: #4a9eff;
+            border: none;
+            color: #fff;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 13px;
+            margin-bottom: 5px;
+            transition: background 0.2s;
+        }
+        button:hover { background: #3a8eef; }
+        button.secondary {
+            background: #555;
+        }
+        button.secondary:hover { background: #666; }
+        .checkbox-row {
+            display: flex;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .checkbox-row input {
+            margin-right: 8px;
+            width: 16px;
+            height: 16px;
+        }
+        .checkbox-row label {
+            font-size: 13px;
+            cursor: pointer;
+        }
+        #model-info, #camera-info {
+            font-size: 11px;
+            color: #888;
+            background: #252525;
+            padding: 8px;
+            border-radius: 4px;
+            margin-bottom: 10px;
+        }
+        #model-info { margin-top: 10px; margin-bottom: 0; }
+        #model-info div, #camera-info div { margin-bottom: 4px; }
+        #camera-info span, #model-info span { color: #aaa; font-family: monospace; }
+        #stats {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(30, 30, 30, 0.95);
+            padding: 10px 15px;
+            border-radius: 8px;
+            font-size: 12px;
+            z-index: 100;
+        }
+        #loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(30, 30, 30, 0.95);
+            padding: 20px 40px;
+            border-radius: 8px;
+            z-index: 200;
+            display: none;
+        }
+        .toggle-panel {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 101;
+            display: none;
+        }
+        #controls.hidden { display: none; }
+        #controls.hidden + .toggle-panel { display: block; }
+        .vec3-row {
+            display: flex;
+            gap: 4px;
+        }
+        .vec3-row input {
+            flex: 1;
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+
+    <div id="controls">
+        <h2>GLTF Viewer</h2>
+
+        <div class="control-section">
+            <h3>Model</h3>
+            <select id="model-select">
+                <option value="">Select a model...</option>
+            </select>
+            <button id="reload-btn" class="secondary">Reload Model</button>
+        </div>
+
+        <div class="control-section">
+            <h3>Display</h3>
+            <div class="checkbox-row">
+                <input type="checkbox" id="wireframe">
+                <label for="wireframe">Wireframe</label>
+            </div>
+            <div class="checkbox-row">
+                <input type="checkbox" id="grid" checked>
+                <label for="grid">Grid</label>
+            </div>
+            <div class="checkbox-row">
+                <input type="checkbox" id="axes" checked>
+                <label for="axes">Axes Helper</label>
+            </div>
+            <div class="checkbox-row">
+                <input type="checkbox" id="bounding-box">
+                <label for="bounding-box">Bounding Box</label>
+            </div>
+            <div class="checkbox-row">
+                <input type="checkbox" id="auto-rotate">
+                <label for="auto-rotate">Auto Rotate</label>
+            </div>
+            <div class="control-row">
+                <label>Background</label>
+                <input type="color" id="bg-color" value="#1a1a1a">
+            </div>
+        </div>
+
+        <div class="control-section">
+            <h3>Transform</h3>
+            <div class="control-row">
+                <label>Position X</label>
+                <input type="range" id="pos-x" min="-10" max="10" step="0.1" value="0">
+                <input type="number" id="pos-x-num" value="0" step="0.1">
+            </div>
+            <div class="control-row">
+                <label>Position Y</label>
+                <input type="range" id="pos-y" min="-10" max="10" step="0.1" value="0">
+                <input type="number" id="pos-y-num" value="0" step="0.1">
+            </div>
+            <div class="control-row">
+                <label>Position Z</label>
+                <input type="range" id="pos-z" min="-10" max="10" step="0.1" value="0">
+                <input type="number" id="pos-z-num" value="0" step="0.1">
+            </div>
+            <div class="control-row">
+                <label>Rotation X</label>
+                <input type="range" id="rot-x" min="-180" max="180" step="1" value="0">
+                <input type="number" id="rot-x-num" value="0" step="1">
+            </div>
+            <div class="control-row">
+                <label>Rotation Y</label>
+                <input type="range" id="rot-y" min="-180" max="180" step="1" value="0">
+                <input type="number" id="rot-y-num" value="0" step="1">
+            </div>
+            <div class="control-row">
+                <label>Rotation Z</label>
+                <input type="range" id="rot-z" min="-180" max="180" step="1" value="0">
+                <input type="number" id="rot-z-num" value="0" step="1">
+            </div>
+            <div class="control-row">
+                <label>Scale</label>
+                <input type="range" id="scale" min="0.1" max="5" step="0.1" value="1">
+                <input type="number" id="scale-num" value="1" step="0.1">
+            </div>
+            <button id="reset-transform" class="secondary">Reset Transform</button>
+        </div>
+
+        <div class="control-section">
+            <h3>Lighting</h3>
+            <div class="control-row">
+                <label>Ambient</label>
+                <input type="range" id="ambient-intensity" min="0" max="2" step="0.1" value="0.5">
+                <input type="number" id="ambient-intensity-num" value="0.5" step="0.1">
+            </div>
+            <div class="control-row">
+                <label>Ambient Color</label>
+                <input type="color" id="ambient-color" value="#ffffff">
+            </div>
+            <div class="control-row">
+                <label>Directional</label>
+                <input type="range" id="dir-intensity" min="0" max="3" step="0.1" value="1">
+                <input type="number" id="dir-intensity-num" value="1" step="0.1">
+            </div>
+            <div class="control-row">
+                <label>Dir Color</label>
+                <input type="color" id="dir-color" value="#ffffff">
+            </div>
+            <div class="checkbox-row">
+                <input type="checkbox" id="shadows" checked>
+                <label for="shadows">Cast Shadows</label>
+            </div>
+        </div>
+
+        <div class="control-section">
+            <h3>Camera</h3>
+            <div id="camera-info">
+                <div>Position: <span id="cam-pos">0, 0, 0</span></div>
+                <div>Target: <span id="cam-target">0, 0, 0</span></div>
+            </div>
+            <div class="control-row">
+                <label>FOV</label>
+                <input type="range" id="fov" min="20" max="120" step="1" value="50">
+                <input type="number" id="fov-num" value="50" step="1">
+            </div>
+            <div class="control-row">
+                <label>Near</label>
+                <input type="range" id="near" min="0.01" max="1" step="0.01" value="0.1">
+                <input type="number" id="near-num" value="0.1" step="0.01">
+            </div>
+            <div class="control-row">
+                <label>Far</label>
+                <input type="range" id="far" min="100" max="10000" step="100" value="1000">
+                <input type="number" id="far-num" value="1000" step="100">
+            </div>
+            <button id="reset-camera" class="secondary">Reset Camera</button>
+            <button id="fit-camera" class="secondary">Fit to Model</button>
+        </div>
+
+        <div class="control-section">
+            <h3>Model Info</h3>
+            <div id="model-info">
+                <div>Vertices: <span id="info-vertices">-</span></div>
+                <div>Triangles: <span id="info-triangles">-</span></div>
+                <div>Meshes: <span id="info-meshes">-</span></div>
+                <div>Materials: <span id="info-materials">-</span></div>
+                <div>Textures: <span id="info-textures">-</span></div>
+            </div>
+        </div>
+
+        <button id="toggle-panel">Hide Panel (H)</button>
+    </div>
+
+    <button class="toggle-panel" id="show-panel">Show Panel (H)</button>
+
+    <div id="stats">
+        <div>FPS: <span id="fps">0</span></div>
+    </div>
+
+    <div id="loading">Loading model...</div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+
+        // Scene setup
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(5, 5, 5);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1;
+        container.appendChild(renderer.domElement);
+
+        // Controls
+        const controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = 0.05;
+        controls.screenSpacePanning = true;
+        controls.minDistance = 0.1;
+        controls.maxDistance = 500;
+        controls.addEventListener('change', () => typeof scheduleURLUpdate !== 'undefined' && scheduleURLUpdate());
+
+        // Lights
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        scene.add(ambientLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+        directionalLight.position.set(5, 10, 7.5);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.mapSize.width = 2048;
+        directionalLight.shadow.mapSize.height = 2048;
+        directionalLight.shadow.camera.near = 0.1;
+        directionalLight.shadow.camera.far = 50;
+        directionalLight.shadow.camera.left = -10;
+        directionalLight.shadow.camera.right = 10;
+        directionalLight.shadow.camera.top = 10;
+        directionalLight.shadow.camera.bottom = -10;
+        scene.add(directionalLight);
+
+        // Helpers
+        const gridHelper = new THREE.GridHelper(20, 20, 0x444444, 0x333333);
+        scene.add(gridHelper);
+
+        const axesHelper = new THREE.AxesHelper(5);
+        scene.add(axesHelper);
+
+        let boundingBoxHelper = null;
+
+        // Loader setup
+        const loader = new GLTFLoader();
+        const dracoLoader = new DRACOLoader();
+        dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
+        loader.setDRACOLoader(dracoLoader);
+
+        // Current model
+        let currentModel = null;
+
+        // Camera presets per model
+        const cameraPresets = {
+            '1.glb': { pos: [17.77, 16.52, -4.36], target: [-40.13, -44.2, 13.11] },
+            '2.glb': { pos: [5.92, 5.00, 6.77], target: [0.92, 0.00, 1.77] },
+            '3.glb': { pos: [6.86, 3.29, 7.76], target: [-12.25, -8.7, -12.34] },
+        };
+
+        // URL state encoding (compact base64)
+        function encodeState(model, pos, target) {
+            const nums = [pos.x, pos.y, pos.z, target.x, target.y, target.z].map(n => Math.round(n * 100) / 100);
+            const data = model.replace('.glb', '') + ',' + nums.join(',');
+            return btoa(data).replace(/=+$/, '');
+        }
+
+        function decodeState(str) {
+            try {
+                const data = atob(str + '=='.slice(0, (4 - str.length % 4) % 4));
+                const parts = data.split(',');
+                if (parts.length !== 7) return null;
+                return {
+                    model: parts[0] + '.glb',
+                    pos: { x: +parts[1], y: +parts[2], z: +parts[3] },
+                    target: { x: +parts[4], y: +parts[5], z: +parts[6] }
+                };
+            } catch { return null; }
+        }
+
+        function updateURL() {
+            const model = document.getElementById('model-select').value;
+            if (!model) return;
+            const state = encodeState(model, camera.position, controls.target);
+            const url = new URL(window.location);
+            url.searchParams.set('v', state);
+            history.replaceState(null, '', url);
+        }
+
+        function getURLState() {
+            const params = new URLSearchParams(window.location.search);
+            return params.get('v') ? decodeState(params.get('v')) : null;
+        }
+
+        let urlUpdateTimeout;
+        function scheduleURLUpdate() {
+            clearTimeout(urlUpdateTimeout);
+            urlUpdateTimeout = setTimeout(updateURL, 500);
+        }
+
+        function applyCameraPreset(filename) {
+            const urlState = getURLState();
+            if (urlState && urlState.model === filename) {
+                camera.position.set(urlState.pos.x, urlState.pos.y, urlState.pos.z);
+                controls.target.set(urlState.target.x, urlState.target.y, urlState.target.z);
+                controls.update();
+            } else {
+                const preset = cameraPresets[filename];
+                if (preset) {
+                    camera.position.set(...preset.pos);
+                    controls.target.set(...preset.target);
+                    controls.update();
+                } else {
+                    fitCameraToModel();
+                }
+            }
+            updateURL();
+        }
+
+        // Model list (static for GitHub Pages, or fetched from server)
+        const staticModels = [
+            { name: 'Wat Mahathat', filename: '1.glb' },
+            { name: 'Wat Yai Chai Mongkhon', filename: '2.glb' },
+            { name: 'Wat Chaiwatthanaram', filename: '3.glb' },
+        ];
+
+        // Detect if running on GitHub Pages or local server
+        const isGitHubPages = window.location.hostname.includes('github.io');
+        const modelBasePath = isGitHubPages ? '.' : '/models';
+
+        // Load models list
+        async function loadModelsList() {
+            let models = staticModels;
+
+            // Try fetching from server if not on GitHub Pages
+            if (!isGitHubPages) {
+                try {
+                    const response = await fetch('/models');
+                    if (response.ok) models = await response.json();
+                } catch (e) { /* Use static list */ }
+            }
+
+            const select = document.getElementById('model-select');
+            models.forEach(model => {
+                const option = document.createElement('option');
+                option.value = model.filename;
+                option.textContent = model.name;
+                select.appendChild(option);
+            });
+            // Load from URL state or default to first model
+            const urlState = getURLState();
+            const initialModel = urlState ? urlState.model : models[0]?.filename;
+            if (initialModel && models.some(m => m.filename === initialModel)) {
+                select.value = initialModel;
+                loadModel(initialModel);
+            }
+        }
+
+        // Load a model
+        function loadModel(filename) {
+            if (!filename) return;
+
+            document.getElementById('loading').style.display = 'block';
+
+            if (currentModel) {
+                scene.remove(currentModel);
+                currentModel.traverse(child => {
+                    if (child.geometry) child.geometry.dispose();
+                    if (child.material) {
+                        if (Array.isArray(child.material)) {
+                            child.material.forEach(m => m.dispose());
+                        } else {
+                            child.material.dispose();
+                        }
+                    }
+                });
+            }
+
+            if (boundingBoxHelper) {
+                scene.remove(boundingBoxHelper);
+                boundingBoxHelper = null;
+            }
+
+            loader.load(
+                `${modelBasePath}/${filename}`,
+                (gltf) => {
+                    currentModel = gltf.scene;
+                    currentModel.traverse(child => {
+                        if (child.isMesh) {
+                            child.castShadow = true;
+                            child.receiveShadow = true;
+                        }
+                    });
+                    scene.add(currentModel);
+
+                    updateModelInfo();
+                    resetTransform();
+                    applyCameraPreset(filename);
+                    updateBoundingBox();
+
+                    document.getElementById('loading').style.display = 'none';
+                },
+                (progress) => {
+                    // Progress callback
+                },
+                (error) => {
+                    console.error('Error loading model:', error);
+                    document.getElementById('loading').style.display = 'none';
+                    alert('Error loading model: ' + error.message);
+                }
+            );
+        }
+
+        // Update model info
+        function updateModelInfo() {
+            if (!currentModel) return;
+
+            let vertices = 0, triangles = 0, meshes = 0;
+            const materials = new Set();
+            const textures = new Set();
+
+            currentModel.traverse(child => {
+                if (child.isMesh) {
+                    meshes++;
+                    if (child.geometry) {
+                        const geo = child.geometry;
+                        vertices += geo.attributes.position ? geo.attributes.position.count : 0;
+                        triangles += geo.index ? geo.index.count / 3 : (geo.attributes.position ? geo.attributes.position.count / 3 : 0);
+                    }
+                    if (child.material) {
+                        const mats = Array.isArray(child.material) ? child.material : [child.material];
+                        mats.forEach(m => {
+                            materials.add(m.uuid);
+                            ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap', 'emissiveMap'].forEach(prop => {
+                                if (m[prop]) textures.add(m[prop].uuid);
+                            });
+                        });
+                    }
+                }
+            });
+
+            document.getElementById('info-vertices').textContent = vertices.toLocaleString();
+            document.getElementById('info-triangles').textContent = Math.floor(triangles).toLocaleString();
+            document.getElementById('info-meshes').textContent = meshes;
+            document.getElementById('info-materials').textContent = materials.size;
+            document.getElementById('info-textures').textContent = textures.size;
+        }
+
+        // Fit camera to model
+        function fitCameraToModel() {
+            if (!currentModel) return;
+
+            const box = new THREE.Box3().setFromObject(currentModel);
+            const center = box.getCenter(new THREE.Vector3());
+            const size = box.getSize(new THREE.Vector3());
+
+            const maxDim = Math.max(size.x, size.y, size.z);
+            const fov = camera.fov * (Math.PI / 180);
+            let cameraZ = Math.abs(maxDim / Math.sin(fov / 2)) * 1.2;
+
+            camera.position.set(center.x + cameraZ * 0.5, center.y + cameraZ * 0.5, center.z + cameraZ);
+            controls.target.copy(center);
+            controls.update();
+        }
+
+        // Reset transform
+        function resetTransform() {
+            if (!currentModel) return;
+
+            currentModel.position.set(0, 0, 0);
+            currentModel.rotation.set(0, 0, 0);
+            currentModel.scale.set(1, 1, 1);
+
+            ['pos-x', 'pos-y', 'pos-z'].forEach(id => {
+                document.getElementById(id).value = 0;
+                document.getElementById(id + '-num').value = 0;
+            });
+            ['rot-x', 'rot-y', 'rot-z'].forEach(id => {
+                document.getElementById(id).value = 0;
+                document.getElementById(id + '-num').value = 0;
+            });
+            document.getElementById('scale').value = 1;
+            document.getElementById('scale-num').value = 1;
+
+            updateBoundingBox();
+        }
+
+        // Reset camera
+        function resetCamera() {
+            camera.position.set(5, 5, 5);
+            controls.target.set(0, 0, 0);
+            controls.update();
+        }
+
+        // Update bounding box
+        function updateBoundingBox() {
+            if (boundingBoxHelper) {
+                scene.remove(boundingBoxHelper);
+            }
+
+            if (currentModel && document.getElementById('bounding-box').checked) {
+                const box = new THREE.Box3().setFromObject(currentModel);
+                boundingBoxHelper = new THREE.Box3Helper(box, 0x00ff00);
+                scene.add(boundingBoxHelper);
+            }
+        }
+
+        // Set wireframe
+        function setWireframe(enabled) {
+            if (!currentModel) return;
+            currentModel.traverse(child => {
+                if (child.isMesh && child.material) {
+                    const mats = Array.isArray(child.material) ? child.material : [child.material];
+                    mats.forEach(m => m.wireframe = enabled);
+                }
+            });
+        }
+
+        // Link slider and number input
+        function linkInputs(sliderId, numberId, callback) {
+            const slider = document.getElementById(sliderId);
+            const number = document.getElementById(numberId);
+
+            slider.addEventListener('input', () => {
+                number.value = slider.value;
+                callback(parseFloat(slider.value));
+            });
+
+            number.addEventListener('change', () => {
+                slider.value = number.value;
+                callback(parseFloat(number.value));
+            });
+        }
+
+        // Setup controls
+        function setupControls() {
+            // Model select
+            document.getElementById('model-select').addEventListener('change', (e) => {
+                loadModel(e.target.value);
+            });
+
+            document.getElementById('reload-btn').addEventListener('click', () => {
+                const select = document.getElementById('model-select');
+                if (select.value) loadModel(select.value);
+            });
+
+            // Display toggles
+            document.getElementById('wireframe').addEventListener('change', (e) => setWireframe(e.target.checked));
+            document.getElementById('grid').addEventListener('change', (e) => gridHelper.visible = e.target.checked);
+            document.getElementById('axes').addEventListener('change', (e) => axesHelper.visible = e.target.checked);
+            document.getElementById('bounding-box').addEventListener('change', updateBoundingBox);
+            document.getElementById('auto-rotate').addEventListener('change', (e) => controls.autoRotate = e.target.checked);
+
+            document.getElementById('bg-color').addEventListener('input', (e) => {
+                scene.background = new THREE.Color(e.target.value);
+            });
+            scene.background = new THREE.Color('#1a1a1a');
+
+            // Transform controls
+            linkInputs('pos-x', 'pos-x-num', v => { if (currentModel) { currentModel.position.x = v; updateBoundingBox(); } });
+            linkInputs('pos-y', 'pos-y-num', v => { if (currentModel) { currentModel.position.y = v; updateBoundingBox(); } });
+            linkInputs('pos-z', 'pos-z-num', v => { if (currentModel) { currentModel.position.z = v; updateBoundingBox(); } });
+            linkInputs('rot-x', 'rot-x-num', v => { if (currentModel) { currentModel.rotation.x = THREE.MathUtils.degToRad(v); updateBoundingBox(); } });
+            linkInputs('rot-y', 'rot-y-num', v => { if (currentModel) { currentModel.rotation.y = THREE.MathUtils.degToRad(v); updateBoundingBox(); } });
+            linkInputs('rot-z', 'rot-z-num', v => { if (currentModel) { currentModel.rotation.z = THREE.MathUtils.degToRad(v); updateBoundingBox(); } });
+            linkInputs('scale', 'scale-num', v => { if (currentModel) { currentModel.scale.setScalar(v); updateBoundingBox(); } });
+
+            document.getElementById('reset-transform').addEventListener('click', resetTransform);
+
+            // Lighting controls
+            linkInputs('ambient-intensity', 'ambient-intensity-num', v => ambientLight.intensity = v);
+            document.getElementById('ambient-color').addEventListener('input', (e) => ambientLight.color.set(e.target.value));
+            linkInputs('dir-intensity', 'dir-intensity-num', v => directionalLight.intensity = v);
+            document.getElementById('dir-color').addEventListener('input', (e) => directionalLight.color.set(e.target.value));
+            document.getElementById('shadows').addEventListener('change', (e) => {
+                renderer.shadowMap.enabled = e.target.checked;
+                if (currentModel) {
+                    currentModel.traverse(child => {
+                        if (child.isMesh) {
+                            child.castShadow = e.target.checked;
+                            child.receiveShadow = e.target.checked;
+                        }
+                    });
+                }
+            });
+
+            // Camera controls
+            linkInputs('fov', 'fov-num', v => { camera.fov = v; camera.updateProjectionMatrix(); });
+            linkInputs('near', 'near-num', v => { camera.near = v; camera.updateProjectionMatrix(); });
+            linkInputs('far', 'far-num', v => { camera.far = v; camera.updateProjectionMatrix(); });
+
+            document.getElementById('reset-camera').addEventListener('click', resetCamera);
+            document.getElementById('fit-camera').addEventListener('click', fitCameraToModel);
+
+            // Panel toggle
+            const controlsPanel = document.getElementById('controls');
+            document.getElementById('toggle-panel').addEventListener('click', () => controlsPanel.classList.add('hidden'));
+            document.getElementById('show-panel').addEventListener('click', () => controlsPanel.classList.remove('hidden'));
+        }
+
+        // WASD movement
+        const keys = { w: false, a: false, s: false, d: false, space: false, shift: false };
+        const moveSpeed = 0.1;
+
+        document.addEventListener('keydown', (e) => {
+            const key = e.key.toLowerCase();
+            if (key in keys) keys[key] = true;
+            if (e.key === 'Shift') keys.shift = true;
+            if (e.key === ' ') { keys.space = true; e.preventDefault(); }
+            if (key === 'h') document.getElementById('controls').classList.toggle('hidden');
+        });
+
+        document.addEventListener('keyup', (e) => {
+            const key = e.key.toLowerCase();
+            if (key in keys) keys[key] = false;
+            if (e.key === 'Shift') keys.shift = false;
+            if (e.key === ' ') keys.space = false;
+        });
+
+        // Release all keys when window loses focus
+        window.addEventListener('blur', () => {
+            Object.keys(keys).forEach(k => keys[k] = false);
+        });
+
+        function updateMovement() {
+            const speed = moveSpeed;
+            const direction = new THREE.Vector3();
+            camera.getWorldDirection(direction);
+            direction.y = 0;
+            direction.normalize();
+
+            const right = new THREE.Vector3();
+            right.crossVectors(direction, camera.up).normalize();
+
+            if (keys.w) {
+                camera.position.addScaledVector(direction, speed);
+                controls.target.addScaledVector(direction, speed);
+            }
+            if (keys.s) {
+                camera.position.addScaledVector(direction, -speed);
+                controls.target.addScaledVector(direction, -speed);
+            }
+            if (keys.a) {
+                camera.position.addScaledVector(right, -speed);
+                controls.target.addScaledVector(right, -speed);
+            }
+            if (keys.d) {
+                camera.position.addScaledVector(right, speed);
+                controls.target.addScaledVector(right, speed);
+            }
+            if (keys.shift) {
+                camera.position.y -= speed;
+                controls.target.y -= speed;
+            }
+            if (keys.space) {
+                camera.position.y += speed;
+                controls.target.y += speed;
+            }
+        }
+
+        // FPS counter
+        let frameCount = 0;
+        let lastTime = performance.now();
+
+        function updateFPS() {
+            frameCount++;
+            const now = performance.now();
+            if (now - lastTime >= 1000) {
+                document.getElementById('fps').textContent = frameCount;
+                frameCount = 0;
+                lastTime = now;
+            }
+        }
+
+        // Camera info update
+        function updateCameraInfo() {
+            const p = camera.position;
+            const t = controls.target;
+            document.getElementById('cam-pos').textContent =
+                `${p.x.toFixed(2)}, ${p.y.toFixed(2)}, ${p.z.toFixed(2)}`;
+            document.getElementById('cam-target').textContent =
+                `${t.x.toFixed(2)}, ${t.y.toFixed(2)}, ${t.z.toFixed(2)}`;
+        }
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            updateMovement();
+            controls.update();
+            renderer.render(scene, camera);
+            updateFPS();
+            updateCameraInfo();
+        }
+
+        // Handle resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        // Initialize
+        setupControls();
+        loadModelsList();
+        animate();
+    </script>
+</body>
+</html>
