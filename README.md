@@ -1,4 +1,4 @@
-# Ayutthaya 3D
+# Ayutthaya 3D Scans
 
 3D viewer for interior scans from Ayutthaya, Thailand.
 
