@@ -812,7 +812,8 @@
         loader.setDRACOLoader(dracoLoader);
 
         // URL encoding (binary packed, URL-safe base64)
-        // Format: model(4b) + fov(7b) + 6 coords(96b) + flags(6b) + bgColor(24b) = 18 bytes → 24 chars
+        // Format v1 (18 bytes → 24 chars): model + fov + cam pos/target + flags + bgColor
+        // Format v2 (39 bytes → 52 chars): v1 + transform + lighting + near/far
         const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
         const B64_INV = Object.fromEntries([...B64].map((c, i) => [c, i]));
 
@@ -830,9 +831,13 @@
                    ($('shadows')?.checked ? 32 : 0);
         }
 
-        function getBgColor() {
-            const hex = $('bg-color')?.value || '#1a1a1a';
+        function parseHexColor(hex) {
+            hex = hex || '#000000';
             return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
+        }
+
+        function getBgColor() {
+            return parseHexColor($('bg-color')?.value || '#1a1a1a');
         }
 
         function encodeState(model, pos, target, fov) {
@@ -842,8 +847,8 @@
             const flags = getDisplayFlags();
             const [bgR, bgG, bgB] = getBgColor();
 
-            // Layout: model(1) + fov(1) + 6×int16(12) + flags(1) + rgb(3) = 18 bytes
-            const bytes = new Uint8Array(18);
+            // Layout: 18 bytes (original) + 21 bytes (extended) = 39 bytes → 52 chars
+            const bytes = new Uint8Array(39);
             bytes[0] = modelId;
             bytes[1] = fovByte;
             floats.forEach((f, i) => {
@@ -856,26 +861,53 @@
             bytes[16] = bgG;
             bytes[17] = bgB;
 
+            // Transform: model pos (int8 ×10), rotation (int16 degrees), scale (uint8 ×10)
+            const toRotU16 = v => { const c = clamp(Math.round(v), -180, 180); return c < 0 ? c + 65536 : c; };
+            bytes[18] = clamp(Math.round(+$('pos-x').value * 10), -100, 100);
+            bytes[19] = clamp(Math.round(+$('pos-y').value * 10), -100, 100);
+            bytes[20] = clamp(Math.round(+$('pos-z').value * 10), -100, 100);
+            const rx = toRotU16(+$('rot-x').value);
+            bytes[21] = rx >> 8; bytes[22] = rx & 0xFF;
+            const ry = toRotU16(+$('rot-y').value);
+            bytes[23] = ry >> 8; bytes[24] = ry & 0xFF;
+            const rz = toRotU16(+$('rot-z').value);
+            bytes[25] = rz >> 8; bytes[26] = rz & 0xFF;
+            bytes[27] = clamp(Math.round(+$('scale').value * 10), 1, 50);
+
+            // Lighting: intensity (uint8 ×10), colors (RGB)
+            bytes[28] = clamp(Math.round(+$('ambient-intensity').value * 10), 0, 20);
+            bytes[29] = clamp(Math.round(+$('dir-intensity').value * 10), 0, 30);
+            const ambCol = parseHexColor($('ambient-color').value);
+            bytes[30] = ambCol[0]; bytes[31] = ambCol[1]; bytes[32] = ambCol[2];
+            const dirCol = parseHexColor($('dir-color').value);
+            bytes[33] = dirCol[0]; bytes[34] = dirCol[1]; bytes[35] = dirCol[2];
+
+            // Camera near (uint8 ×100) and far (uint8 ÷100)
+            bytes[36] = clamp(Math.round(+$('near').value * 100), 1, 100);
+            bytes[37] = clamp(Math.round(+$('far').value / 100), 1, 100);
+            bytes[38] = 0; // reserved
+
             let result = '';
-            for (let i = 0; i < 18; i += 3) {
-                const [b0, b1, b2] = [bytes[i], bytes[i + 1] ?? 0, bytes[i + 2] ?? 0];
+            for (let i = 0; i < 39; i += 3) {
+                const [b0, b1, b2] = [bytes[i], bytes[i + 1], bytes[i + 2]];
                 result += B64[b0 >> 2] + B64[((b0 & 3) << 4) | (b1 >> 4)];
-                if (i + 1 < 18) result += B64[((b1 & 15) << 2) | (b2 >> 6)];
-                if (i + 2 < 18) result += B64[b2 & 63];
+                result += B64[((b1 & 15) << 2) | (b2 >> 6)];
+                result += B64[b2 & 63];
             }
             return result;
         }
 
         function decodeState(str) {
-            if (!str || str.length !== 24) return null;
+            if (!str || (str.length !== 24 && str.length !== 52)) return null;
             try {
-                const bytes = new Uint8Array(18);
-                for (let i = 0, j = 0; i < 24; i += 4) {
+                const byteLen = str.length === 24 ? 18 : 39;
+                const bytes = new Uint8Array(byteLen);
+                for (let i = 0, j = 0; i < str.length; i += 4) {
                     const [b0, b1, b2, b3] = [B64_INV[str[i]], B64_INV[str[i + 1]], B64_INV[str[i + 2]], B64_INV[str[i + 3]]];
                     if (b0 === undefined || b1 === undefined || b2 === undefined || b3 === undefined) return null;
                     bytes[j++] = (b0 << 2) | (b1 >> 4);
-                    bytes[j++] = ((b1 & 15) << 4) | (b2 >> 2);
-                    bytes[j++] = ((b2 & 3) << 6) | b3;
+                    if (j < byteLen) bytes[j++] = ((b1 & 15) << 4) | (b2 >> 2);
+                    if (j < byteLen) bytes[j++] = ((b2 & 3) << 6) | b3;
                 }
 
                 const modelId = bytes[0];
@@ -887,9 +919,10 @@
                 }
 
                 const flags = bytes[14];
-                const bgColor = `#${bytes[15].toString(16).padStart(2, '0')}${bytes[16].toString(16).padStart(2, '0')}${bytes[17].toString(16).padStart(2, '0')}`;
+                const toHex = b => b.toString(16).padStart(2, '0');
+                const bgColor = `#${toHex(bytes[15])}${toHex(bytes[16])}${toHex(bytes[17])}`;
 
-                return {
+                const state = {
                     model: `${modelId + 1}.glb`,
                     fov,
                     pos: { x: floats[0], y: floats[1], z: floats[2] },
@@ -904,6 +937,34 @@
                     },
                     bgColor,
                 };
+
+                // Extended fields (v2: 39 bytes)
+                if (byteLen === 39) {
+                    const fromI8 = b => (b > 127 ? b - 256 : b) / 10;
+                    const fromI16 = (hi, lo) => { const u = (hi << 8) | lo; return u > 32767 ? u - 65536 : u; };
+
+                    state.transform = {
+                        posX: fromI8(bytes[18]),
+                        posY: fromI8(bytes[19]),
+                        posZ: fromI8(bytes[20]),
+                        rotX: fromI16(bytes[21], bytes[22]),
+                        rotY: fromI16(bytes[23], bytes[24]),
+                        rotZ: fromI16(bytes[25], bytes[26]),
+                        scale: bytes[27] / 10,
+                    };
+                    state.lighting = {
+                        ambientIntensity: bytes[28] / 10,
+                        dirIntensity: bytes[29] / 10,
+                        ambientColor: `#${toHex(bytes[30])}${toHex(bytes[31])}${toHex(bytes[32])}`,
+                        dirColor: `#${toHex(bytes[33])}${toHex(bytes[34])}${toHex(bytes[35])}`,
+                    };
+                    state.cameraNearFar = {
+                        near: bytes[36] / 100,
+                        far: bytes[37] * 100,
+                    };
+                }
+
+                return state;
             } catch { return null; }
         }
 
@@ -993,8 +1054,10 @@
             );
         }
 
-        function applyDisplayFlags(flags, bgColor) {
-            // Apply flags to UI and scene
+        function applyURLState(state) {
+            const { flags, bgColor } = state;
+
+            // Display flags
             $('wireframe').checked = flags.wireframe;
             $('grid').checked = flags.grid;
             $('axes').checked = flags.axes;
@@ -1009,6 +1072,52 @@
             controls.autoRotate = flags.autoRotate;
             renderer.shadowMap.enabled = flags.shadows;
             scene.background = new THREE.Color(bgColor);
+
+            // Transform
+            if (state.transform) {
+                const t = state.transform;
+                $('pos-x').value = $('pos-x-num').value = t.posX;
+                $('pos-y').value = $('pos-y-num').value = t.posY;
+                $('pos-z').value = $('pos-z-num').value = t.posZ;
+                $('rot-x').value = $('rot-x-num').value = t.rotX;
+                $('rot-y').value = $('rot-y-num').value = t.rotY;
+                $('rot-z').value = $('rot-z-num').value = t.rotZ;
+                $('scale').value = $('scale-num').value = t.scale;
+
+                if (currentModel) {
+                    currentModel.position.set(t.posX, t.posY, t.posZ);
+                    currentModel.rotation.set(
+                        THREE.MathUtils.degToRad(t.rotX),
+                        THREE.MathUtils.degToRad(t.rotY),
+                        THREE.MathUtils.degToRad(t.rotZ)
+                    );
+                    currentModel.scale.setScalar(t.scale);
+                }
+            }
+
+            // Lighting
+            if (state.lighting) {
+                const l = state.lighting;
+                $('ambient-intensity').value = $('ambient-intensity-num').value = l.ambientIntensity;
+                $('dir-intensity').value = $('dir-intensity-num').value = l.dirIntensity;
+                $('ambient-color').value = l.ambientColor;
+                $('dir-color').value = l.dirColor;
+
+                ambientLight.intensity = l.ambientIntensity;
+                ambientLight.color.set(l.ambientColor);
+                directionalLight.intensity = l.dirIntensity;
+                directionalLight.color.set(l.dirColor);
+            }
+
+            // Camera near/far
+            if (state.cameraNearFar) {
+                const c = state.cameraNearFar;
+                $('near').value = $('near-num').value = c.near;
+                $('far').value = $('far-num').value = c.far;
+                camera.near = c.near;
+                camera.far = c.far;
+                camera.updateProjectionMatrix();
+            }
         }
 
         function applyCameraPreset(filename) {
@@ -1020,7 +1129,7 @@
                 camera.fov = fov;
                 camera.updateProjectionMatrix();
                 $('fov').value = $('fov-num').value = fov;
-                if (flags) applyDisplayFlags(flags, bgColor);
+                applyURLState(urlState);
             } else {
                 const preset = CONFIG.presets[filename];
                 if (preset) {
@@ -1149,27 +1258,27 @@
             });
 
             // Transform
-            const updatePos = axis => v => { if (currentModel) { currentModel.position[axis] = v; updateBoundingBox(); } };
-            const updateRot = axis => v => { if (currentModel) { currentModel.rotation[axis] = THREE.MathUtils.degToRad(v); updateBoundingBox(); } };
+            const updatePos = axis => v => { if (currentModel) { currentModel.position[axis] = v; updateBoundingBox(); } scheduleURLUpdate(); };
+            const updateRot = axis => v => { if (currentModel) { currentModel.rotation[axis] = THREE.MathUtils.degToRad(v); updateBoundingBox(); } scheduleURLUpdate(); };
             linkInputs('pos-x', updatePos('x'));
             linkInputs('pos-y', updatePos('y'));
             linkInputs('pos-z', updatePos('z'));
             linkInputs('rot-x', updateRot('x'));
             linkInputs('rot-y', updateRot('y'));
             linkInputs('rot-z', updateRot('z'));
-            linkInputs('scale', v => { if (currentModel) { currentModel.scale.setScalar(v); updateBoundingBox(); } });
-            on('reset-transform', 'click', resetTransform);
+            linkInputs('scale', v => { if (currentModel) { currentModel.scale.setScalar(v); updateBoundingBox(); } scheduleURLUpdate(); });
+            on('reset-transform', 'click', () => { resetTransform(); scheduleURLUpdate(); });
 
             // Lighting
-            linkInputs('ambient-intensity', v => ambientLight.intensity = v);
-            linkInputs('dir-intensity', v => directionalLight.intensity = v);
-            on('ambient-color', 'input', e => ambientLight.color.set(e.target.value));
-            on('dir-color', 'input', e => directionalLight.color.set(e.target.value));
+            linkInputs('ambient-intensity', v => { ambientLight.intensity = v; scheduleURLUpdate(); });
+            linkInputs('dir-intensity', v => { directionalLight.intensity = v; scheduleURLUpdate(); });
+            on('ambient-color', 'input', e => { ambientLight.color.set(e.target.value); scheduleURLUpdate(); });
+            on('dir-color', 'input', e => { directionalLight.color.set(e.target.value); scheduleURLUpdate(); });
 
             // Camera
-            linkInputs('fov', v => { camera.fov = v; camera.updateProjectionMatrix(); });
-            linkInputs('near', v => { camera.near = v; camera.updateProjectionMatrix(); });
-            linkInputs('far', v => { camera.far = v; camera.updateProjectionMatrix(); });
+            linkInputs('fov', v => { camera.fov = v; camera.updateProjectionMatrix(); scheduleURLUpdate(); });
+            linkInputs('near', v => { camera.near = v; camera.updateProjectionMatrix(); scheduleURLUpdate(); });
+            linkInputs('far', v => { camera.far = v; camera.updateProjectionMatrix(); scheduleURLUpdate(); });
             on('reset-camera', 'click', () => { camera.position.set(5, 5, 5); controls.target.set(0, 0, 0); controls.update(); });
             on('fit-camera', 'click', fitCameraToModel);
 
