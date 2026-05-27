@@ -993,7 +993,7 @@
 
         // Model loading
         const isGitHubPages = location.hostname.includes('github.io');
-        const modelBasePath = isGitHubPages ? '.' : '/models';
+        const modelBasePath = isGitHubPages ? '.' : 'models';
 
         function disposeModel(model) {
             model?.traverse(child => {
@@ -1147,7 +1147,7 @@
             let models = CONFIG.models;
             if (!isGitHubPages) {
                 try {
-                    const res = await fetch('/models');
+                    const res = await fetch('models');
                     if (res.ok) models = await res.json();
                 } catch {}
             }
